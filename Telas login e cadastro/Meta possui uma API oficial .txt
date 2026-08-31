@@ -1,0 +1,190 @@
+Sim, a Meta possui uma API oficial e dedicada para desenvolvedores criarem sistemas de agendamento e publicação automática de posts: a Instagram Graph API (Content Publishing). [1] 
+Como você está desenvolvendo o seu próprio sistema, você não precisará de ferramentas de terceiros (como Zapier ou Make). Você pode fazer requisições HTTP diretamente para os servidores da Meta. [2] 
+O funcionamento da API de publicação da Meta é baseado em um modelo de dois passos obrigatórios: [3] 
+------------------------------
+## 🚀 Como funciona o Fluxo de Publicação via API
+A Meta utiliza o conceito de Media Containers (Contêineres de Mídia). Você não envia a imagem/legenda e publica tudo de uma vez. O fluxo técnico funciona assim: [1, 4] 
+## Passo 1: Criar o Contêiner de Mídia
+Você envia uma requisição POST para o endpoint da conta profissional informando a URL da imagem/vídeo (que precisa estar hospedada em um servidor público, como um S3 da AWS) e a legenda. [1] 
+
+* Endpoint: POST https://facebook.com{instagram-business-account-id}/media
+* Parâmetros: image_url (ou video_url), caption (legenda).
+* Retorno: A API retornará um ID temporário chamado creation_id (o ID do contêiner). [1, 2, 4] 
+
+## Passo 2: Publicar o Contêiner
+Com o creation_id em mãos, você faz uma segunda requisição para efetivar a postagem no feed. [1] 
+
+* Endpoint: POST https://facebook.com{instagram-business-account-id}/media_publish
+* Parâmetros: creation_id.
+* Retorno: O ID oficial do post publicado no Instagram. [1] 
+
+------------------------------
+## 📅 E o Agendamento de Posts?
+A API não possui um parâmetro nativo de "schedule_date" para posts orgânicos.
+Para organizar e agendar posts no seu sistema, você deve criar a lógica de agendamento no seu próprio banco de dados. [5] 
+
+   1. O usuário escolhe a data/hora no painel do seu sistema.
+   2. Você salva o post e o horário no seu banco de dados (ex: PostgreSQL, MySQL).
+   3. Você cria um serviço em segundo plano no seu servidor (um Cron Job em Node.js, PHP, Python, etc.).
+   4. Esse Cron executa de minuto em minuto, verifica quais posts atingiram o horário agendado e dispara os dois passos da API da Meta descritos acima. [1] 
+
+------------------------------
+## 📌 Limitações Importantes da API que você precisa prever no código:
+
+* Formatos Suportados: Feed (Imagens únicas ou Carrosséis de até 10 mídias), Reels e Stories. [1, 4] 
+* Limite de Taxa (Rate Limit): Cada conta do Instagram pode publicar no máximo 25 a 50 posts a cada 24 horas via API. Seu sistema precisa validar e alertar o usuário caso ele tente estourar esse limite. [1, 4, 6] 
+* Apenas Contas Profissionais: A API rejeitará requisições de contas pessoais. O usuário final do seu sistema obrigatoriamente precisará ter uma conta Business/Creator vinculada a uma Página do Facebook. [2, 4, 7] 
+
+------------------------------
+## 🛠️ O que você precisa para começar a programar:
+
+   1. Criar uma conta de desenvolvedor no portal [Meta for Developers](https://developers.facebook.com/).
+   2. Criar um "Aplicativo" do tipo Empresa (Business) dentro do painel.
+   3. Implementar o Facebook Login no seu sistema para que seus clientes façam login e te deem acesso através dos escopos (permissões) obrigatórios:
+   * instagram_business_basic
+      * instagram_business_content_publish [1, 4] 
+   4. Enquanto você desenvolve, use o Graph API Explorer da Meta para testar as requisições manualmente antes de escrever as linhas de código.
+
+Se você quiser, posso gerar um exemplo de código (em Node.js, Python ou PHP) demonstrando como fazer a requisição de criação do contêiner e publicação. Qual linguagem você está utilizando no seu backend?
+
+[1] [https://developers.facebook.com](https://developers.facebook.com/documentation/instagram-platform/content-publishing)
+[2] [https://zernio.com](https://zernio.com/blog/instagram-graph-api)
+[3] [https://postproxy.dev](https://postproxy.dev/blog/post-to-instagram-via-api/)
+[4] [https://postproxy.dev](https://postproxy.dev/blog/post-to-instagram-via-api/)
+[5] [https://developers.facebook.com](https://developers.facebook.com/blog/post/2021/01/26/introducing-instagram-content-publishing-api/?locale=pt_BR)
+[6] [https://developers.facebook.com](https://developers.facebook.com/blog/post/2021/01/26/introducing-instagram-content-publishing-api/)
+[7] [https://developers.facebook.com](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login)
+
+Para criar a parte onde o usuário conecta a conta do Instagram dele ao seu sistema, você precisa implementar o fluxo do Facebook Login for Business. Como o Instagram pertence à Meta, a autenticação e as permissões passam obrigatoriamente pelo ecossistema do Facebook.
+O objetivo do seu código backend em Node.js é capturar o Token de Acesso do Usuário, trocá-lo por um Token de Longa Duração (que dura 60 dias) e descobrir o ID da conta comercial do Instagram do cliente.
+Aqui está a arquitetura e o exemplo prático de como fazer isso usando Node.js, Express e Axios.
+------------------------------
+## 1. Preparação no Painel Meta for Developers
+Antes do código, vá no seu app da Meta e garanta que:
+
+* Adicionou o produto Facebook Login para Empresas (Facebook Login for Business).
+* Configurou a URI de Redirecionamento de OAuth Válida (ex: http://localhost:3000/auth/facebook/callback).
+* Adicionou as permissões necessárias para o app: instagram_basic, instagram_content_publish, pages_show_list e pages_read_engagement.
+
+------------------------------
+## 2. Fluxo no Node.js (Exemplo de Código)
+Instale as dependências básicas se ainda não tiver:
+
+npm install express axios dotenv
+
+Configure seu arquivo .env:
+
+META_APP_ID=seu_app_id_aqui
+META_APP_SECRET=seu_app_secret_aqui
+REDIRECT_URI=http://localhost:3000/auth/facebook/callback
+
+Crie o arquivo do seu servidor (ex: server.js):
+
+import express from 'express';import axios from 'axios';import 'dotenv/config';
+const app = express();const PORT = 3000;
+// PASSO 1: Redirecionar o usuário para a Meta autorizar o seu sistema
+app.get('/auth/facebook', (req, res) => {
+    const stringPermissoes = [
+        'instagram_basic',
+        'instagram_content_publish',
+        'pages_show_list',
+        'pages_read_engagement'
+    ].join(',');
+
+    const urlMetaAuth = `https://facebook.com?` +
+        `client_id=${process.env.META_APP_ID}` +
+        `&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}` +
+        `&scope=${stringPermissoes}` +
+        `&response_type=code`;
+
+    // Redireciona o usuário para a tela de login/permissões da Meta
+    res.redirect(urlMetaAuth);
+});
+// PASSO 2: Capturar o código de retorno e buscar os dados do Instagram
+app.get('/auth/facebook/callback', async (req, res) => {
+    const { code, error } = req.query;
+
+    if (error) {
+        return res.status(400).send(`Erro na autorização: ${error}`);
+    }
+
+    try {
+        // A. Trocar o 'code' temporário por um Token de Curta Duração
+        const tokenResponse = await axios.get('https://facebook.com', {
+            params: {
+                client_id: process.env.META_APP_ID,
+                client_secret: process.env.META_APP_SECRET,
+                redirect_uri: process.env.REDIRECT_URI,
+                code: code
+            }
+        });
+
+        const shortLivedToken = tokenResponse.data.access_token;
+
+        // B. Trocar o token de curta duração por um Token de Longa Duração (60 dias)
+        const longLivedTokenResponse = await axios.get('https://facebook.com', {
+            params: {
+                grant_type: 'fb_exchange_token',
+                client_id: process.env.META_APP_ID,
+                client_secret: process.env.META_APP_SECRET,
+                fb_exchange_token: shortLivedToken
+            }
+        });
+
+        const accessTokenUser = longLivedTokenResponse.data.access_token;
+
+        // C. Descobrir quais Páginas do Facebook o usuário gerencia e qual Instagram está vinculado
+        const accountsResponse = await axios.get('https://facebook.com', {
+            params: {
+                fields: 'name,instagram_business_account{id,username,name}',
+                access_token: accessTokenUser
+            }
+        });
+
+        const paginas = accountsResponse.data.data;
+
+        // D. Filtrar e extrair apenas as contas do Instagram válidas
+        const contasInstagramConectadas = paginas
+            .filter(pagina => pagina.instagram_business_account)
+            .map(pagina => ({
+                pageName: pagina.name,
+                instagramId: pagina.instagram_business_account.id,
+                instagramUsername: pagina.instagram_business_account.username,
+                instagramName: pagina.instagram_business_account.name
+            }));
+
+        if (contasInstagramConectadas.length === 0) {
+            return res.send('Conectado com sucesso ao Facebook, mas nenhuma página possui uma conta do Instagram Comercial/Business vinculada.');
+        }
+
+        // =========================================================================
+        // AQUI VOCÊ SALVA NO SEU BANCO DE DADOS:
+        // Salve o 'accessTokenUser' (Token de Longa Duração) e o 'instagramId'
+        // associando-os ao ID do usuário logado no seu sistema.
+        // =========================================================================
+
+        res.json({
+            mensagem: "Conexão realizada com sucesso!",
+            dadosGerais: contasInstagramConectadas
+        });
+
+    } catch (err) {
+        console.error('Erro no fluxo de autenticação:', err.response?.data || err.message);
+        res.status(500).send('Erro interno ao processar a autenticação.');
+    }
+});
+
+app.listen(PORT, () => console.log(`Servidor rodando em http://localhost:${PORT}`));
+
+------------------------------
+## 🔄 Como testar esse fluxo no seu ambiente local?
+
+   1. Inicialize o servidor rodando node server.js.
+   2. Acesse no seu navegador: http://localhost:3000/auth/facebook.
+   3. Você será jogado para a Meta, aceitará os termos escolhendo qual página quer ceder acesso e, ao finalizar, será jogado de volta para o seu terminal local com o JSON contendo os IDs do Instagram na tela.
+
+## 🔑 O que fazer com o Token de 60 dias após expirar?
+Para que o usuário do seu sistema não precise refazer o login a cada 2 meses, a boa prática de desenvolvimento é criar uma rotina (um script agendado no seu servidor) que roda a cada 45 ou 50 dias pegando aquele token salvo no seu banco de dados e enviando para o endpoint da Meta para renovar o token por mais 60 dias automaticamente, sem incomodar seu cliente.
+Se você quiser avançar, me diga: você usa algum ORM ou Banco de dados específico (Sequelize, Prisma, MongoDB) onde gostaria de ver como estruturar a tabela para salvar esses tokens, ou prefere partir direto para o código de publicação do post?
+
+
